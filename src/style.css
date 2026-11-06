@@ -526,3 +526,65 @@ input[type="text"]:focus {
   .user-loc-pulse, .live-dot, .locate-fab, .btn-use-location.busy { animation: none; }
   .toast { transition: none; }
 }
+
+
+/* ================= Sugerencias de búsqueda ================= */
+.suggestions-list { max-height: 280px; padding: 6px; }
+
+.suggestions-list li[role="option"] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 10px;
+  white-space: normal;
+  color: #202124;
+}
+
+.suggestions-list li[role="option"]:hover,
+.suggestions-list li[role="option"].is-active {
+  background: #e8f0fe;
+  color: #202124;
+  font-weight: 400;
+}
+
+.sugg-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #f1f3f4;
+  color: #5f6368;
+}
+.is-active .sugg-icon,
+li[role="option"]:hover .sugg-icon { background: #d2e3fc; color: #1a73e8; }
+
+.sugg-text { min-width: 0; display: flex; flex-direction: column; }
+
+.sugg-title {
+  font-size: 0.88rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sugg-title mark { background: none; color: #1a73e8; font-weight: 700; }
+
+.sugg-sub {
+  font-size: 0.76rem;
+  color: #5f6368;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestions-list .sugg-status {
+  padding: 12px;
+  font-size: 0.82rem;
+  color: #5f6368;
+  cursor: default;
+  white-space: normal;
+}
+.suggestions-list .sugg-status:hover { background: none; color: #5f6368; font-weight: 400; }

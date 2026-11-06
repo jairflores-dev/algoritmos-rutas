@@ -4,7 +4,8 @@ import { geocodeLocation, fetchDynamicGraph, fetchAddressSuggestions } from './s
 import {
   initMap, renderDynamicMarkers, renderRoute,
   startNavigationAnimation, stopNavigationAnimation,
-  showUserLocation, clearUserLocation, centerOnUser, followUser, onMapDragStart
+  showUserLocation, clearUserLocation, centerOnUser, followUser, onMapDragStart,
+  getMapCenter, focusPoint
 } from './map/mapController.js';
 import { updateMetrics, showToast, setLiveStatus, formatDistance } from './ui/telemetryPanel.js';
 import * as gps from './services/locationService.js';
@@ -73,48 +74,216 @@ onMapDragStart(() => {
 });
 
 /* ---------- Autocompletado ---------- */
-function setupAutocomplete(inputId, listId, onSelectCoords) {
+
+// Las sugerencias dan prioridad a lugares cercanos: tu GPS si lo hay, si no el centro del mapa
+function searchBias() {
+  const fix = gps.getLastFix();
+  return fix ? { lat: fix.lat, lng: fix.lng } : getMapCenter();
+}
+
+// Texto con la parte coincidente en negrita (nodos de texto, sin innerHTML)
+function highlight(text, query) {
+  const frag = document.createDocumentFragment();
+  const q = query.trim();
+  const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (i < 0) {
+    frag.append(text);
+    return frag;
+  }
+  const mark = document.createElement('mark');
+  mark.textContent = text.slice(i, i + q.length);
+  frag.append(text.slice(0, i), mark, text.slice(i + q.length));
+  return frag;
+}
+
+function pinIcon(gpsIcon = false) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.innerHTML = gpsIcon
+    ? '<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'
+    : '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>';
+  return svg;
+}
+
+function setupAutocomplete(inputId, listId, { onEdit, onSelect, offerMyLocation = false }) {
   const input = $(inputId);
   const list = $(listId);
+  const GPS_ITEM = { kind: 'gps', title: 'Mi ubicación', subtitle: 'Usar tu posición actual' };
 
-  const handleInput = debounce(async () => {
-    const query = input.value;
-    const suggestions = await fetchAddressSuggestions(query);
+  let options = [];     // solo las filas que se pueden elegir
+  let activeIndex = -1;
+  let requestId = 0;
 
-    list.innerHTML = '';
-    if (suggestions.length === 0) {
-      list.classList.remove('active');
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', listId);
+  input.setAttribute('aria-expanded', 'false');
+  list.setAttribute('role', 'listbox');
+
+  function close() {
+    list.classList.remove('active');
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    activeIndex = -1;
+  }
+
+  function setActive(index) {
+    const rows = list.querySelectorAll('[role="option"]');
+    rows.forEach((row, i) => {
+      const on = i === index;
+      row.classList.toggle('is-active', on);
+      row.setAttribute('aria-selected', String(on));
+      if (on) {
+        input.setAttribute('aria-activedescendant', row.id);
+        row.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    activeIndex = index;
+  }
+
+  function choose(item) {
+    close();
+    if (item.kind === 'gps') {
+      useMyLocation();
+      return;
+    }
+    input.value = item.label;
+    onSelect({ lat: item.lat, lng: item.lng });
+  }
+
+  function render(entries, query) {
+    list.replaceChildren();
+    options = [];
+    if (entries.length === 0) {
+      close();
       return;
     }
 
-    suggestions.forEach(item => {
+    entries.forEach((entry) => {
       const li = document.createElement('li');
-      li.textContent = item.displayName;
-      li.addEventListener('click', () => {
-        input.value = item.displayName;
-        onSelectCoords({ lat: item.lat, lng: item.lng });
-        list.classList.remove('active');
-      });
+
+      if (entry.kind === 'status') {
+        li.className = 'sugg-status';
+        li.textContent = entry.text;
+        list.appendChild(li);
+        return;
+      }
+
+      const index = options.length;
+      options.push(entry);
+      li.id = `${listId}-opt-${index}`;
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', 'false');
+
+      const icon = document.createElement('span');
+      icon.className = 'sugg-icon';
+      icon.appendChild(pinIcon(entry.kind === 'gps'));
+
+      const text = document.createElement('span');
+      text.className = 'sugg-text';
+      const title = document.createElement('strong');
+      title.className = 'sugg-title';
+      title.appendChild(entry.kind === 'gps' ? document.createTextNode(entry.title) : highlight(entry.title, query));
+      text.appendChild(title);
+      if (entry.subtitle) {
+        const sub = document.createElement('small');
+        sub.className = 'sugg-sub';
+        sub.textContent = entry.subtitle;
+        text.appendChild(sub);
+      }
+
+      li.append(icon, text);
+      // mousedown evita que el campo pierda el foco antes de elegir
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('click', () => choose(entry));
+      li.addEventListener('mousemove', () => { if (activeIndex !== index) setActive(index); });
       list.appendChild(li);
     });
 
     list.classList.add('active');
-  }, 300);
+    input.setAttribute('aria-expanded', 'true');
+    activeIndex = -1;
+  }
 
-  input.addEventListener('input', handleInput);
+  const search = debounce(async () => {
+    const query = input.value.trim();
+    const id = ++requestId;
+
+    if (query.length < 3) {
+      render(offerMyLocation ? [GPS_ITEM] : [], query);
+      return;
+    }
+
+    if (options.length === 0) render([{ kind: 'status', text: 'Buscando…' }], query);
+
+    try {
+      const results = await fetchAddressSuggestions(query, { bias: searchBias() });
+      if (results === null || id !== requestId) return; // respuesta vieja o cancelada
+      render(
+        results.length ? results.map((r) => ({ kind: 'place', ...r })) : [{ kind: 'status', text: `Sin resultados para «${query}»` }],
+        query
+      );
+    } catch (err) {
+      if (id !== requestId) return;
+      console.warn('Error al buscar sugerencias:', err);
+      render([{ kind: 'status', text: 'No se pudo buscar. Revisa tu conexión.' }], query);
+    }
+  }, 250);
+
+  input.addEventListener('input', () => {
+    onEdit();   // el texto cambió: las coordenadas anteriores ya no valen
+    search();
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim().length < 3 && offerMyLocation) render([GPS_ITEM], '');
+  });
+
+  input.addEventListener('keydown', (e) => {
+    const open = list.classList.contains('active') && options.length > 0;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!open) return;
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      setActive((activeIndex + step + options.length) % options.length);
+    } else if (e.key === 'Enter' && open && activeIndex >= 0) {
+      e.preventDefault(); // elige la sugerencia en lugar de enviar el formulario
+      choose(options[activeIndex]);
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
 
   document.addEventListener('click', (e) => {
-    if (!input.contains(e.target) && !list.contains(e.target)) {
-      list.classList.remove('active');
-    }
+    if (!input.contains(e.target) && !list.contains(e.target)) close();
   });
 }
 
-setupAutocomplete('input-start', 'suggestions-start', (coords) => { clickedStart = coords; startFromGps = false; });
-setupAutocomplete('input-target', 'suggestions-target', (coords) => { clickedTarget = coords; });
+// Después de elegir una sugerencia: si ya hay origen y destino, se calcula sola la ruta
+function afterSelection(coords) {
+  renderDynamicMarkers(clickedStart, clickedTarget);
+  if ((clickedStart || startFromGps) && clickedTarget) processRouting();
+  else focusPoint(coords.lat, coords.lng);
+}
 
-// Si el usuario escribe encima de "Mi ubicación", deja de usarse el GPS como origen
-$('input-start').addEventListener('input', () => { startFromGps = false; });
+setupAutocomplete('input-start', 'suggestions-start', {
+  offerMyLocation: true,
+  onEdit: () => { clickedStart = null; startFromGps = false; },
+  onSelect: (coords) => { clickedStart = coords; startFromGps = false; afterSelection(coords); }
+});
+
+setupAutocomplete('input-target', 'suggestions-target', {
+  onEdit: () => { clickedTarget = null; },
+  onSelect: (coords) => { clickedTarget = coords; afterSelection(coords); }
+});
 
 $('route-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -160,11 +329,13 @@ async function processRouting() {
       const fix = gps.getLastFix();
       if (fix) startCoords = { lat: fix.lat, lng: fix.lng };
       if (!startCoords) throw new Error('Aún no tenemos tu ubicación. Inténtalo en unos segundos.');
-    } else if (!startCoords || !startVal.includes(',')) {
-      startCoords = await geocodeLocation(startVal);
+    } else if (!startCoords) {
+      startCoords = await geocodeLocation(startVal, { bias: searchBias() });
+      clickedStart = startCoords;
     }
-    if (!targetCoords || !targetVal.includes(',')) {
-      targetCoords = await geocodeLocation(targetVal);
+    if (!targetCoords) {
+      targetCoords = await geocodeLocation(targetVal, { bias: searchBias() });
+      clickedTarget = targetCoords;
     }
 
     renderDynamicMarkers(startCoords, targetCoords);
@@ -294,7 +465,7 @@ btnLocate.addEventListener('click', () => {
 });
 
 // "Usar mi ubicación" como punto de partida
-btnUseLoc.addEventListener('click', async () => {
+async function useMyLocation() {
   btnUseLoc.classList.add('busy');
   const fix = await waitForFix();
   btnUseLoc.classList.remove('busy');
@@ -310,7 +481,9 @@ btnUseLoc.addEventListener('click', async () => {
   } else {
     centerOnUser(fix);
   }
-});
+}
+
+btnUseLoc.addEventListener('click', useMyLocation);
 
 /* ---------- Navegación en vivo ---------- */
 function setNavButton(state) {

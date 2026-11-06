@@ -206,3 +206,17 @@ export function followUser(fix) {
 export function onMapDragStart(callback) {
   if (map) map.on('dragstart', callback);
 }
+
+
+// Centro actual del mapa (sirve para priorizar sugerencias cercanas)
+export function getMapCenter() {
+  if (!map) return null;
+  const c = map.getCenter();
+  return { lat: c.lat, lng: c.lng };
+}
+
+// Lleva la cámara a un lugar elegido (movimiento suave)
+export function focusPoint(lat, lng, zoom = 15) {
+  if (!map) return;
+  map.setView([lat, lng], Math.max(map.getZoom(), zoom), { animate: !reduceMotion, duration: 0.8 });
+}
